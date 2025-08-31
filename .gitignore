@@ -1,0 +1,14 @@
+# Node modules
+node_modules/
+
+# Python venv
+.venv/
+_pycache_/
+
+# Build files
+dist/
+build/
+
+# System files
+.DS_Store
+Thumbs.db
