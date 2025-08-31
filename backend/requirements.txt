@@ -31,3 +31,4 @@ werkzeug
 openai
 ollama
 pytesseract
+PyPDF2
