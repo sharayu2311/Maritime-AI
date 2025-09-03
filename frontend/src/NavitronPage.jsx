@@ -1,5 +1,4 @@
-// src/NavitronPage.jsx
-import React, { useState, useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import captainImg from "./captain.png";
 import { usePassage } from "./PassageContext";
 
@@ -31,13 +30,29 @@ const DISTANCES = {
 };
 
 export default function NavitronPage() {
-  // ✅ Use PassageContext for global sharing
-  const { departure, destination, setDeparture, setDestination } = usePassage();
+  // ✅ Pull from context using the actual keys in PassageContext
+  const {
+    selectedVessel,
+    setSelectedVessel,
+    selectedCargo,
+    setSelectedCargo,
+    departureDate,
+    setDepartureDate,
+    departure,
+    setDeparture,
+    destination,
+    setDestination,
+  } = usePassage();
 
-  // Local states
-  const [vessel, setVessel] = useState("");
-  const [cargo, setCargo] = useState("");
-  const [laycanDate, setLaycanDate] = useState("");
+  // ⚡ Map them back to short names so rest of file works unchanged
+  const vessel = selectedVessel;
+  const setVessel = setSelectedVessel;
+  const cargo = selectedCargo;
+  const setCargo = setSelectedCargo;
+  const laycanDate = departureDate;
+  const setLaycanDate = setDepartureDate;
+
+  // Local result only
   const [result, setResult] = useState("");
 
   // Chatbot states
@@ -57,15 +72,7 @@ export default function NavitronPage() {
     if (vessel && cargo && departure && destination) {
       handleCalculate();
     }
-  }, [vessel, cargo, departure, destination]);
-
-  // 🔥 NEW: Sync from PassageContext (ChatPage updates)
-  useEffect(() => {
-    // If ChatPage sets departure/destination, they will appear here
-    if (departure && destination) {
-      handleCalculate();
-    }
-  }, [departure, destination]);
+  }, [vessel, cargo, departure, destination, laycanDate]);
 
   // Command parser
   const handleCommand = (command) => {
@@ -263,7 +270,7 @@ export default function NavitronPage() {
 
           <input
             type="date"
-            value={laycanDate}
+            value={laycanDate || ""}
             onChange={(e) => setLaycanDate(e.target.value)}
             className="p-2 rounded bg-[#0a1128] border border-blue-700"
           />

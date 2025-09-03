@@ -1,10 +1,31 @@
+// src/ChatPage.jsx
 import { useEffect, useRef, useState } from "react";
 import { Mic, Send, Upload, Loader2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import captainImg from "./captain.png";
-import { usePassage } from "./PassageContext.jsx";
+import { usePassage } from "./PassageContext.jsx"; // ✅ global context
 
 const DEFAULT_API = "http://localhost:8000";
+
+// --- TIME (Option B: network-backed IST with fallback) ---
+const TIMEZONE = "Asia/Kolkata";
+function formatISTFromMs(ms) {
+  return new Intl.DateTimeFormat("en-IN", {
+    timeZone: TIMEZONE,
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+  }).format(new Date(ms));
+}
+function localISTFallbackString() {
+  // If API is unavailable, format the client's current time as IST (Intl will adjust)
+  return formatISTFromMs(Date.now());
+}
 
 export default function ChatPage() {
   const [apiBase, setApiBase] = useState(DEFAULT_API);
@@ -13,30 +34,70 @@ export default function ChatPage() {
   const [messages, setMessages] = useState([
     {
       role: "assistant",
-      content: `Ahoy! I'm Captain here to assist you. You can:
-• Set vessel details (e.g. "set vessel to Marine Star")
-• Set cargo (e.g. "set cargo to 50000 MT of Iron Ore") 
-• Set route (e.g. "from Mumbai to Singapore")
-• Type "voyage estimation" to see your inputs
-• Ask about weather, distances, or CP clauses`,
+      content:
+        "Ahoy! I’m Captain here to assist you with laytime, weather, distances, or CP clauses.",
     },
   ]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [mode, setMode] = useState("chat");
+  const [mode, setMode] = useState("chat"); // "chat" or "voice"
+  const [speaking, setSpeaking] = useState(false); // ✅ new state
+
+  // --- IST state
+  const [istTime, setIstTime] = useState(localISTFallbackString());
+  const istOffsetRef = useRef(0); // serverTimeMs - clientNowMs
 
   const chatRef = useRef(null);
   const docRef = useRef(null);
   const cpRef = useRef(null);
   const navigate = useNavigate();
-  const { setPassage } = usePassage();
 
+  // ✅ global context
+  const { setPassage, setVoyage } = usePassage();
+
+  // --- Sync with world time API and keep ticking ---
+  useEffect(() => {
+    let timer = null;
+    let mounted = true;
+
+    async function initTime() {
+      try {
+        const res = await fetch("https://worldtimeapi.org/api/timezone/Asia/Kolkata");
+        if (!res.ok) throw new Error("time api response not ok");
+        const j = await res.json();
+        // j.datetime example: "2025-09-01T20:04:12.345678+05:30"
+        const serverMs = Date.parse(j.datetime);
+        const clientMs = Date.now();
+        istOffsetRef.current = serverMs - clientMs;
+
+        if (!mounted) return;
+        setIstTime(formatISTFromMs(clientMs + istOffsetRef.current));
+
+        timer = setInterval(() => {
+          setIstTime(formatISTFromMs(Date.now() + istOffsetRef.current));
+        }, 1000);
+      } catch (e) {
+        // fallback: keep updating local time (formatted to IST) every second
+        setIstTime(localISTFallbackString());
+        timer = setInterval(() => setIstTime(localISTFallbackString()), 1000);
+      }
+    }
+
+    initTime();
+    return () => {
+      mounted = false;
+      if (timer) clearInterval(timer);
+    };
+  }, []);
+
+  // --- Auto-scroll ---
   useEffect(() => {
     if (chatRef.current) {
       chatRef.current.scrollTop = chatRef.current.scrollHeight;
     }
   }, [messages, busy]);
 
+  // --- API helper ---
   async function apiFetch(path, options = {}) {
     try {
       const res = await fetch(`${apiBase}${path}`, options);
@@ -46,16 +107,25 @@ export default function ChatPage() {
     }
   }
 
+  // --- TTS ---
   function speak(text) {
     try {
       speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(text);
+      u.onstart = () => setSpeaking(true);
+      u.onend = () => setSpeaking(false);
       speechSynthesis.speak(u);
     } catch {
-      // ignore errors if speech synthesis not supported
+      setSpeaking(false);
     }
   }
 
+  function stopSpeaking() {
+    speechSynthesis.cancel();
+    setSpeaking(false);
+  }
+
+  // --- Extract route (e.g. "from Dubai to Delhi") ---
   function extractRoute(text) {
     const match = text.match(/from\s+([a-zA-Z\s]+)\s+to\s+([a-zA-Z\s]+)/i);
     if (match) {
@@ -64,96 +134,80 @@ export default function ChatPage() {
     return null;
   }
 
-  function extractVessel(text) {
-    const match = text.match(/set vessel(?:\sname)?\sto\s+([a-zA-Z0-9\s]+)/i);
-    return match ? match[1].trim() : null;
-  }
-
-  function extractCargo(text) {
-    const match = text.match(/set cargo(?:\sdetails)?\sto\s+(\d+)\s*([a-zA-Z]+)\s+of\s+([a-zA-Z\s]+)/i);
-    if (match) {
-      return {
-        quantity: match[1],
-        unit: match[2],
-        type: match[3].trim()
-      };
-    }
-    return null;
-  }
-
+  // --- Send message ---
   async function send(text) {
     const content = (text ?? input).trim();
     if (!content) return;
 
     setInput("");
     setTranscript("");
-
     const lower = content.toLowerCase();
 
-    // Check for vessel updates
-    const vessel = extractVessel(content);
-    if (vessel) {
-      setPassage(prev => ({ ...prev, vessel }));
-      setMessages(m => [...m, 
-        { role: "assistant", content: `✅ Vessel name set to: ${vessel}` }
-      ]);
+    // --- TIME/DATE query handling (only time part change) ---
+    if (lower.includes("time") || lower.includes("date") || lower.includes("today")) {
+      const replyText = `🕒 Current IST: ${istTime}`;
+      if (mode === "chat") {
+        setMessages((m) => [...m, { role: "assistant", content: replyText }]);
+      }
+      speak(`The current time in India is ${istTime}`);
       return;
     }
 
-    // Check for cargo updates
-    const cargo = extractCargo(content);
-    if (cargo) {
-      setPassage(prev => ({ ...prev, cargo }));
-      setMessages(m => [...m, 
-        { role: "assistant", content: `✅ Cargo set to: ${cargo.quantity} ${cargo.unit} of ${cargo.type}` }
-      ]);
-      return;
-    }
+    // ✅ Voyage estimation (SetVoyageEstimation)
+    if (
+      lower.includes("setvoyageestimation") ||
+      lower.includes("voyage estimation") ||
+      lower.includes("estimate voyage")
+    ) {
+      const depMatch = content.match(/from\s+(\w+)/i);
+      const destMatch = content.match(/to\s+(\w+)/i);
+      const vesselMatch = content.match(/vessel\s+(\w+)/i);
+      const cargoMatch = content.match(/carrying\s+(\w+)/i);
+      const dateMatch = content.match(/departing on\s+(.+)/i);
 
-    // Check for route updates
-    const route = extractRoute(content);
-    if (route) {
-      setPassage(prev => ({ ...prev, ...route }));
-      setMessages(m => [...m, 
-        { role: "assistant", content: `✅ Route set from ${route.departure} to ${route.destination}` }
-      ]);
-      return;
-    }
+      const voyageData = {
+        departure: depMatch ? depMatch[1] : null,
+        destination: destMatch ? destMatch[1] : null,
+        vessel: vesselMatch ? vesselMatch[1] : null,
+        cargo: cargoMatch ? cargoMatch[1] : null,
+        departureDate: dateMatch ? dateMatch[1] : null,
+      };
 
-    // Voyage estimation → save + go to Navitron
-    if (lower.includes("voyage estimation") || 
-        lower.includes("voyage-estimation") || 
-        lower.includes("estimate voyage")) {
+      setVoyage(voyageData);
       navigate("/navitron");
       return;
     }
 
-    // Passage planning → save + navigate
-    if (lower.includes("passage planning") || 
-        lower.includes("passage-planning") || 
-        lower.includes("plan route")) {
+    // ✅ Passage planning (SetPassage)
+    if (
+      lower.includes("setpassage") ||
+      lower.includes("passage planning") ||
+      lower.includes("plan route")
+    ) {
+      const route = extractRoute(content);
+      if (route) setPassage(route);
       navigate("/passage-planning");
       return;
     }
 
     // Add user message
     if (mode === "chat") {
-      setMessages(m => [...m, { role: "user", content }]);
+      setMessages((m) => [...m, { role: "user", content }]);
       setBusy(true);
     }
 
-    // Fetch reply from backend
+    // Fetch reply
     const data = await apiFetch("/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: content })
+      body: JSON.stringify({ message: content }),
     });
 
     setBusy(false);
     const reply = data?.reply || data?.error || "(no reply)";
 
     if (mode === "chat") {
-      setMessages(m => [...m, { role: "assistant", content: reply }]);
+      setMessages((m) => [...m, { role: "assistant", content: reply }]);
     }
 
     speak(reply);
@@ -187,6 +241,7 @@ export default function ChatPage() {
     rec.start();
   }
 
+  // --- File upload ---
   function handleFile(e, type) {
     const f = e.target.files?.[0];
     if (!f) return;
@@ -215,6 +270,7 @@ export default function ChatPage() {
     if (type === "doc" && docRef.current) docRef.current.value = "";
   }
 
+  // --- Chat bubble ---
   function Bubble({ role, content }) {
     const mine = role === "user";
     return (
@@ -240,6 +296,8 @@ export default function ChatPage() {
           <div>
             <h1 className="text-2xl font-bold">Captain Ken</h1>
             <p className="text-sm text-blue-200">Ready to help ⚓</p>
+            {/* --- IST display (only time/date change) --- */}
+            <p className="text-xs text-blue-200">🕒 IST: {istTime}</p>
           </div>
         </div>
         <input
@@ -296,12 +354,7 @@ export default function ChatPage() {
               >
                 <Upload className="w-5 h-5" /> Upload Document
               </button>
-              <input
-                ref={docRef}
-                type="file"
-                onChange={(e) => handleFile(e, "doc")}
-                className="hidden"
-              />
+              <input ref={docRef} type="file" onChange={(e) => handleFile(e, "doc")} className="hidden" />
 
               <button
                 onClick={() => cpRef.current?.click()}
@@ -309,12 +362,7 @@ export default function ChatPage() {
               >
                 <Upload className="w-5 h-5" /> Upload CP
               </button>
-              <input
-                ref={cpRef}
-                type="file"
-                onChange={(e) => handleFile(e, "cp")}
-                className="hidden"
-              />
+              <input ref={cpRef} type="file" onChange={(e) => handleFile(e, "cp")} className="hidden" />
             </div>
 
             <div className="flex items-center gap-2">
@@ -335,12 +383,18 @@ export default function ChatPage() {
               </button>
               <button
                 onClick={startListening}
-                className={`p-2 rounded-lg ${
-                  listening ? "bg-red-600" : "bg-green-600"
-                } hover:opacity-80`}
+                className={`p-2 rounded-lg ${listening ? "bg-red-600" : "bg-green-600"} hover:opacity-80`}
                 aria-label="Start voice input"
               >
                 <Mic className="w-5 h-5" />
+              </button>
+              {/* ✅ Stop button always visible */}
+              <button
+                onClick={stopSpeaking}
+                className="p-2 rounded-lg bg-red-700 hover:bg-red-800"
+                aria-label="Stop speaking"
+              >
+                ⏹
               </button>
             </div>
             {transcript && <p className="text-blue-200 text-sm">🎙 {transcript}</p>}
@@ -359,6 +413,13 @@ export default function ChatPage() {
             } hover:opacity-80 flex items-center gap-3`}
           >
             <Mic className="w-6 h-6" /> {listening ? "Listening..." : "Start Talking"}
+          </button>
+          {/* ✅ Stop button also visible in voice mode */}
+          <button
+            onClick={stopSpeaking}
+            className="px-6 py-3 rounded-full font-medium text-lg bg-red-700 hover:bg-red-800 flex items-center gap-3"
+          >
+            ⏹ Stop
           </button>
           {transcript && <p className="text-blue-200 text-sm">🎙 {transcript}</p>}
         </div>

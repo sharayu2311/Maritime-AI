@@ -1,14 +1,7 @@
 # Node modules
-node_modules/
+frontend/node_modules/
 
-# Python venv
-.venv/
-_pycache_/
+# React build
+frontend/build/
+frontend/dist/
 
-# Build files
-dist/
-build/
-
-# System files
-.DS_Store
-Thumbs.db

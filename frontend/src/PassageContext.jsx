@@ -1,35 +1,41 @@
+// src/PassageContext.jsx
+import { createContext, useContext, useState, useMemo } from "react";
+
+const PassageContext = createContext();
+
 export function PassageProvider({ children }) {
   const [departure, setDeparture] = useState(null);
   const [destination, setDestination] = useState(null);
   const [selectedVessel, setSelectedVessel] = useState(null);
   const [selectedCargo, setSelectedCargo] = useState(null);
-  const [voyage, setVoyageState] = useState(null); // ✅ add voyage object
+  const [departureDate, setDepartureDate] = useState(null);
 
+  // Unified voyage object
+  const [voyage, setVoyageState] = useState(null);
+
+  // ✅ For PassagePlanningPage
+  const setPassage = (route) => {
+    if (!route) return;
+    if (route.departure) setDeparture(route.departure);
+    if (route.destination) setDestination(route.destination);
+  };
+
+  // ✅ For NavitronPage (Voyage Estimation)
   const setVoyage = (data) => {
     if (!data) return;
 
-    let dep = data.departure;
-    let dest = data.destination;
-    let vessel = data.vessel;
-    let cargo = data.cargo;
+    if (data.departure) setDeparture(data.departure);
+    if (data.destination) setDestination(data.destination);
+    if (data.vessel) setSelectedVessel(data.vessel);
+    if (data.cargo) setSelectedCargo(data.cargo);
+    if (data.departureDate) setDepartureDate(data.departureDate);
 
-    if (typeof dep === "string") dep = findPortByName(dep);
-    if (typeof dest === "string") dest = findPortByName(dest);
-    if (typeof vessel === "string") vessel = findVesselByName(vessel);
-    if (typeof cargo === "string") cargo = findCargoByName(cargo);
-
-    if (dep) setDeparture(dep);
-    if (dest) setDestination(dest);
-    if (vessel) setSelectedVessel(vessel);
-    if (cargo) setSelectedCargo(cargo);
-
-    // ✅ keep voyage object
     setVoyageState({
-      departure: dep,
-      destination: dest,
-      vessel,
-      cargo,
-      departureDate: data.departureDate || null,
+      departure: data.departure || departure,
+      destination: data.destination || destination,
+      vessel: data.vessel || selectedVessel,
+      cargo: data.cargo || selectedCargo,
+      departureDate: data.departureDate || departureDate,
     });
   };
 
@@ -39,21 +45,26 @@ export function PassageProvider({ children }) {
       destination,
       selectedVessel,
       selectedCargo,
-      voyage,              // ✅ expose voyage
+      departureDate,
+      voyage,
       setDeparture,
       setDestination,
       setSelectedVessel,
       setSelectedCargo,
-      setPassage,
-      setVoyage,
-      ports,
-      vessels,
-      cargoes,
+      setDepartureDate,
+      setPassage,   // ✅ added back for PassagePlanningPage
+      setVoyage,    // ✅ kept for NavitronPage
     }),
-    [departure, destination, selectedVessel, selectedCargo, voyage]
+    [departure, destination, selectedVessel, selectedCargo, departureDate, voyage]
   );
 
   return (
-    <PassageContext.Provider value={value}>{children}</PassageContext.Provider>
+    <PassageContext.Provider value={value}>
+      {children}
+    </PassageContext.Provider>
   );
+}
+
+export function usePassage() {
+  return useContext(PassageContext);
 }
